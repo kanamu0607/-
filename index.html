@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>跳躍ピエロ - FALLING HELL -</title>
+    <style>
+        :root {
+            --bg: #1a1a24;
+            --accent: #ff0055;
+            --goal: #ffcc00;
+            --text: #f0f0f0;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; -webkit-user-select: none; font-family: 'Arial Black', Impact, sans-serif; }
+        body { background-color: var(--bg); color: var(--text); overflow: hidden; touch-action: none; }
+        
+        #game-canvas { display: block; width: 100vw; height: 100vh; }
+
+        /* UI レイヤー */
+        #ui-layer {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none; padding: 20px; display: flex; flex-direction: column;
+        }
+
+        #hud { display: flex; justify-content: space-between; align-items: flex-start; text-shadow: 0 0 10px #000; }
+        .alt-text { font-size: 2rem; color: #00ffcc; font-weight: 900; }
+        .max-alt-text { font-size: 1.2rem; color: #aaa; }
+        .time-text { font-size: 1.5rem; color: #fff; }
+
+        /* 煽りテキスト */
+        #taunt-text {
+            position: absolute; top: 30%; left: 50%; transform: translate(-50%, -50%);
+            font-size: 4rem; font-weight: 900; color: var(--accent); text-align: center;
+            opacity: 0; transition: opacity 0.5s; text-shadow: 0 0 20px #000, 5px 5px 0 #000;
+            white-space: nowrap; z-index: 100;
+        }
+        #taunt-text.show { opacity: 1; animation: tauntAnim 3s forwards; }
+
+        @keyframes tauntAnim {
+            0% { transform: translate(-50%, -50%) scale(0.5); opacity: 0; }
+            10% { transform: translate(-50%, -50%) scale(1.2); opacity: 1; }
+            20% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+            80% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+            100% { transform: translate(-50%, 100px) scale(0.8); opacity: 0; }
+        }
+
+        /* オーバーレイ画面 */
+        .overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.85); display: none; flex-direction: column;
+            justify-content: center; align-items: center; pointer-events: auto; z-index: 200;
+        }
+        .overlay.active { display: flex; }
+
+        .title { font-size: 4rem; color: #fff; margin-bottom: 20px; text-shadow: 0 0 20px var(--accent); text-align: center; }
+        .desc { font-size: 1.2rem; color: #ccc; margin-bottom: 40px; text-align: center; line-height: 1.6; }
+        .btn {
+            background: #111; color: var(--accent); border: 3px solid var(--accent);
+            padding: 15px 40px; font-size: 1.5rem; font-weight: bold; border-radius: 10px;
+            cursor: pointer; transition: 0.2s; box-shadow: 0 0 20px rgba(255, 0, 85, 0.4);
+        }
+        .btn:hover { background: var(--accent); color: #fff; transform: scale(1.1); }
+
+        /* クリア画面専用装飾 */
+        #screen-clear .title { color: var(--goal); text-shadow: 0 0 30px var(--goal); font-size: 5rem; animation: float 2s infinite ease-in-out; }
+        #screen-clear .btn { border-color: var(--goal); color: var(--goal); box-shadow: 0 0 20px rgba(255, 204, 0, 0.4); }
+        #screen-clear .btn:hover { background: var(--goal); color: #000; }
+        @keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-20px); } }
+
+    </style>
+</head>
+<body>
+
+<canvas id="game-canvas"></canvas>
+
+<div id="ui-layer">
+    <div id="hud">
+        <div>
+            <div class="alt-text">高度: <span id="altitude">0</span> m</div>
+            <div class="max-alt-text">最高到達点: <span id="max-altitude">0</span> m</div>
+        </div>
+        <div class="time-text">TIME: <span id="time-display">0.0</span>s</div>
+    </div>
+    <div id="taunt-text">振 り 出 し に 戻 る</div>
+</div>
+
+<!-- スタート画面 -->
+<div id="screen-start" class="overlay active">
+    <div class="title">跳躍ピエロ<br>FALLING HELL</div>
+    <div class="desc">
+        画面をドラッグ（引っ張る）して、離すとジャンプ。<br>
+        遥か上空にある「黄金のゴール」を目指せ。<br><br>
+        <span style="color: var(--accent); font-weight: bold;">※側面にぶつかると異常な勢いで弾かれます。<br>セーブポイントはありません。己の指先だけを信じろ。</span>
+    </div>
+    <button class="btn" onclick="startGame()">地獄へ挑む</button>
+</div>
+
+<!-- クリア画面 -->
+<div id="screen-clear" class="overlay">
+    <div class="title">HELL CLEARED!!</div>
+    <div class="desc" style="font-size: 2rem; color: #fff; margin-bottom: 20px;">見事、地獄を抜け出しました！</div>
+    <div class="desc" id="clear-time" style="font-size: 1.5rem; color: var(--goal);">クリアタイム: 99.9秒</div>
+    <button class="btn" onclick="location.reload()">もう一度地獄へ</button>
+</div>
+
+<script>
+/**
+ * =========================================
+ * CORE ENGINE & PHYSICS
+ * =========================================
+ */
+const canvas = document.getElementById('game-canvas');
+const ctx = canvas.getContext('2d');
+let width, height;
+
+function resize() {
+    width = window.innerWidth; height = window.innerHeight;
+    canvas.width = width; canvas.height = height;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// --- 🎵 サウンドエンジン ---
+const AudioContext = window.AudioContext || window.webkitAudioContext;
+let audioCtx;
+
+function playSound(type) {
+    if (!audioCtx) return;
+    const now = audioCtx.currentTime;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.connect(gain); gain.connect(audioCtx.destination);
+
+    if (type === 'jump') {
+        osc.type = 'sine'; osc.frequency.setValueAtTime(300, now); osc.frequency.exponentialRampToValueAtTime(800, now + 0.2);
+        gain.gain.setValueAtTime(0.3, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.2);
+        osc.start(now); osc.stop(now + 0.2);
+    } else if (type === 'bounce') {
+        osc.type = 'triangle'; osc.frequency.setValueAtTime(150, now); osc.frequency.exponentialRampToValueAtTime(50, now + 0.1);
+        gain.gain.setValueAtTime(0.5, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
+        osc.start(now); osc.stop(now + 0.1);
+    } else if (type === 'fall') {
+        osc.type = 'sawtooth'; osc.frequency.setValueAtTime(400, now); osc.frequency.exponentialRampToValueAtTime(50, now + 1.0);
+        gain.gain.setValueAtTime(0.2, now); gain.gain.linearRampToValueAtTime(0, now + 1.0);
+        osc.start(now); osc.stop(now + 1.0);
+    } else if (type === 'clear') {
+        // 祝福のファンファーレ風
+        osc.type = 'square'; 
+        osc.frequency.setValueAtTime(440, now); // A4
+        osc.frequency.setValueAtTime(554, now + 0.2); // C#5
+        osc.frequency.setValueAtTime(659, now + 0.4); // E5
+        osc.frequency.setValueAtTime(880, now + 0.6); // A5
+        gain.gain.setValueAtTime(0.3, now); gain.gain.linearRampToValueAtTime(0, now + 1.5);
+        osc.start(now); osc.stop(now + 1.5);
+    }
+}
+
+// --- 🎮 ゲームオブジェクト ---
+const GRAVITY = 0.4;
+const TERMINAL_VELOCITY = 20;
+
+let gameState = "TITLE"; // TITLE, PLAYING, CLEAR
+let player = {
+    x: 0, y: 0, px: 0, py: 0,
+    vx: 0, vy: 0, size: 30,
+    grounded: true, state: "normal"
+};
+
+let platforms = [];
+let cameraY = 0;
+let maxAltitude = 0;
+let highestAltitudeEver = 0;
+let isTaunting = false;
+let frameCount = 0;
+
+let dragStart = null;
+let dragCurrent = null;
+const MAX_POWER = 25;
+
+// --- 🗺️ マップ＆ゴール生成 ---
+function generateMap() {
+    platforms = [];
+    platforms.push({ x: -1000, y: height - 20, w: width + 2000, h: 50, type: 'ground' });
+
+    let currentY = height - 150;
+    const totalPlatforms = 150; // ゴールまでの足場の数（減らすと簡単になる）
+    
+    for (let i = 0; i < totalPlatforms; i++) {
+        let diff = i / totalPlatforms; 
+        
+        let w = 150 - (diff * 100); // だんだん狭くなる
+        let x = Math.random() * (width - w);
+        
+        let yGap = 120 + (diff * 130); // だんだん間隔が開く
+        currentY -= yGap;
+
+        // 壁（トラップ）
+        if (Math.random() < 0.35) {
+            platforms.push({ x: x, y: currentY - 100, w: 20, h: 100 + Math.random()*100, type: 'wall' });
+        }
+        platforms.push({ x: x, y: currentY, w: w, h: 20, type: 'platform' });
+    }
+
+    // 🏆 ゴール地点（一番上）
+    platforms.push({ 
+        x: width / 2 - 150, 
+        y: currentY - 300, 
+        w: 300, 
+        h: 40, 
+        type: 'goal' 
+    });
+}
+
+// --- 🕹️ コントロール ---
+function onPointerDown(e) {
+    if (gameState !== "PLAYING" || !player.grounded) return;
+    const x = e.touches ? e.touches[0].clientX : e.clientX;
+    const y = e.touches ? e.touches[0].clientY : e.clientY;
+    dragStart = { x, y };
+    dragCurrent = { x, y };
+}
+
+function onPointerMove(e) {
+    if (!dragStart) return;
+    const x = e.touches ? e.touches[0].clientX : e.clientX;
+    const y = e.touches ? e.touches[0].clientY : e.clientY;
+    dragCurrent = { x, y };
+}
+
+function onPointerUp(e) {
+    if (!dragStart || gameState !== "PLAYING") return;
+    
+    let dx = dragStart.x - dragCurrent.x;
+    let dy = dragStart.y - dragCurrent.y;
+    
+    if (dy > 0) dy = Math.min(dy, 0);
+
+    let powerX = dx * 0.1;
+    let powerY = dy * 0.15; 
+
+    const dist = Math.hypot(powerX, powerY);
+    if (dist > MAX_POWER) {
+        powerX = (powerX / dist) * MAX_POWER;
+        powerY = (powerY / dist) * MAX_POWER;
+    }
+
+    if (dist > 2) { 
+        player.vx = powerX;
+        player.vy = powerY;
+        player.grounded = false;
+        player.state = "jumping";
+        playSound('jump');
+    }
+
+    dragStart = null;
+    dragCurrent = null;
+}
+
+window.addEventListener('mousedown', onPointerDown);
+window.addEventListener('mousemove', onPointerMove);
+window.addEventListener('mouseup', onPointerUp);
+window.addEventListener('touchstart', onPointerDown, {passive: false});
+window.addEventListener('touchmove', onPointerMove, {passive: false});
+window.addEventListener('touchend', onPointerUp);
+
+function startGame() {
+    if (!audioCtx) audioCtx = new AudioContext();
+    document.getElementById('screen-start').classList.remove('active');
+    resize();
+    generateMap();
+    player.x = width / 2;
+    player.y = height - 100;
+    player.vx = 0; player.vy = 0; player.grounded = true;
+    maxAltitude = 0; highestAltitudeEver = 0; frameCount = 0;
+    gameState = "PLAYING";
+    requestAnimationFrame(gameLoop);
+}
+
+function triggerClear() {
+    gameState = "CLEAR";
+    playSound('clear');
+    const timeInSeconds = (frameCount / 60).toFixed(1);
+    document.getElementById('clear-time').innerText = `クリアタイム: ${timeInSeconds}秒`;
+    document.getElementById('screen-clear').classList.add('active');
+}
+
+function showTaunt(message) {
+    if (isTaunting) return;
+    isTaunting = true;
+    const tauntEl = document.getElementById('taunt-text');
+    tauntEl.innerText = message;
+    tauntEl.classList.remove('show');
+    void tauntEl.offsetWidth; 
+    tauntEl.classList.add('show');
+    playSound('fall');
+    setTimeout(() => { isTaunting = false; }, 3000);
+}
+
+/**
+ * =========================================
+ * MAIN UPDATE & DRAW LOOP
+ * =========================================
+ */
+function gameLoop() {
+    if (gameState === "PLAYING") {
+        frameCount++;
+        updatePhysics();
+        updateCameraAndUI();
+    }
+    draw();
+    if (gameState !== "TITLE") {
+        requestAnimationFrame(gameLoop);
+    }
+}
+
+function updatePhysics() {
+    player.px = player.x;
+    player.py = player.y;
+
+    player.vy += GRAVITY;
+    if (player.vy > TERMINAL_VELOCITY) player.vy = TERMINAL_VELOCITY;
+    
+    if (!player.grounded) player.vx *= 0.99;
+
+    player.x += player.vx;
+    player.y += player.vy;
+
+    if (player.x > width) player.x = 0;
+    if (player.x < 0) player.x = width;
+
+    player.grounded = false;
+    player.state = player.vy > 0 ? "falling" : "jumping";
+
+    let pw = player.size;
+    let ph = player.size;
+
+    for (let p of platforms) {
+        if (p.y > player.y + 1500 || p.y < player.y - 1500) continue;
+
+        if (player.x < p.x + p.w && player.x + pw > p.x && 
+            player.y < p.y + p.h && player.y + ph > p.y) {
+            
+            if (player.py + ph <= p.y) {
+                // 上から着地
+                if (p.type === 'goal') {
+                    triggerClear();
+                    return;
+                }
+
+                player.y = p.y - ph;
+                player.vy = 0;
+                player.vx *= 0.8; 
+                player.grounded = true;
+                player.state = "normal";
+                if (Math.abs(player.vx) < 0.5) player.vx = 0;
+            } 
+            else if (player.py >= p.y + p.h) {
+                // 下からぶつける
+                player.y = p.y + p.h;
+                player.vy *= -0.5;
+                playSound('bounce');
+            } 
+            else {
+                // 側面バウンド（極悪）
+                let bouncePower = -1.2; 
+                if (player.px + pw <= p.x) {
+                    player.x = p.x - pw;
+                    player.vx *= bouncePower;
+                } else if (player.px >= p.x + p.w) {
+                    player.x = p.x + p.w;
+                    player.vx *= bouncePower;
+                }
+                playSound('bounce');
+            }
+        }
+    }
+}
+
+function updateCameraAndUI() {
+    let targetCameraY = (height / 2) - player.y + 100;
+    if (targetCameraY > cameraY) {
+        cameraY += (targetCameraY - cameraY) * 0.1;
+    } else {
+        cameraY += (targetCameraY - cameraY) * 0.05;
+    }
+    if (cameraY < 0) cameraY = 0;
+
+    let currentAltitude = Math.floor(((height - 100) - player.y) / 50);
+    if (currentAltitude < 0) currentAltitude = 0;
+    
+    if (currentAltitude > maxAltitude) {
+        maxAltitude = currentAltitude;
+        if (maxAltitude > highestAltitudeEver) highestAltitudeEver = maxAltitude;
+    }
+
+    if (maxAltitude - currentAltitude > 80 && !player.grounded && player.vy > 10) {
+        if (currentAltitude < 10) showTaunt("振 り 出 し に 戻 る");
+        else showTaunt("あーーーっと！！！");
+        maxAltitude = currentAltitude; 
+    }
+
+    document.getElementById('altitude').innerText = currentAltitude;
+    document.getElementById('max-altitude').innerText = highestAltitudeEver;
+    document.getElementById('time-display').innerText = (frameCount / 60).toFixed(1);
+}
+
+function draw() {
+    ctx.fillStyle = '#11111a';
+    ctx.fillRect(0, 0, width, height);
+
+    ctx.save();
+    ctx.translate(0, cameraY);
+
+    // 背景の星（高さの演出）
+    ctx.fillStyle = '#fff';
+    for(let i=0; i<50; i++) {
+        let sx = (i * 47) % width;
+        let sy = -10000 + (i * 200);
+        if (sy + cameraY > 0 && sy + cameraY < height) {
+            ctx.globalAlpha = 0.3;
+            ctx.fillRect(sx, sy, 2, 2);
+        }
+    }
+    ctx.globalAlpha = 1.0;
+
+    // 足場の描画
+    for (let p of platforms) {
+        if (p.y + cameraY > height + 100 || p.y + cameraY < -100) continue; 
+        
+        if (p.type === 'goal') {
+            // ゴールの特別描画
+            ctx.fillStyle = '#ffcc00';
+            ctx.shadowBlur = 20; ctx.shadowColor = '#ffcc00';
+            ctx.fillRect(p.x, p.y, p.w, p.h);
+            ctx.shadowBlur = 0;
+            ctx.fillStyle = '#000';
+            ctx.font = "24px Arial Black"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+            ctx.fillText("GOAL", p.x + p.w/2, p.y + p.h/2);
+        } else {
+            ctx.fillStyle = p.type === 'ground' ? '#333' : p.type === 'wall' ? '#00ffcc' : '#ff0055';
+            ctx.fillRect(p.x, p.y, p.w, p.h);
+            ctx.strokeStyle = '#000'; ctx.lineWidth = 2; ctx.strokeRect(p.x, p.y, p.w, p.h);
+        }
+    }
+
+    // プレイヤーの描画
+    ctx.font = "30px Arial";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    
+    let emoji = "🤡";
+    if (gameState === "CLEAR") emoji = "🏆";
+    else if (player.state === "jumping") emoji = "😎"; 
+    else if (player.state === "falling" && player.vy > 10) emoji = "😱"; 
+
+    ctx.fillText(emoji, player.x + player.size/2, player.y + player.size/2);
+
+    // 引っ張り UI
+    if (dragStart && dragCurrent && player.grounded && gameState === "PLAYING") {
+        let dx = dragStart.x - dragCurrent.x;
+        let dy = dragStart.y - dragCurrent.y;
+        if (dy > 0) dy = 0; 
+
+        let px = player.x + player.size/2;
+        let py = player.y + player.size/2;
+
+        ctx.beginPath();
+        ctx.moveTo(px, py);
+        ctx.lineTo(px + dx, py + dy);
+        ctx.strokeStyle = 'rgba(0, 255, 204, 0.5)';
+        ctx.lineWidth = 4;
+        ctx.setLineDash([5, 5]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+    }
+
+    ctx.restore();
+}
+</script>
+</body>
+</html>
